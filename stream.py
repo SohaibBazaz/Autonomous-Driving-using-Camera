@@ -6,8 +6,8 @@ from beamngpy.sensors import Camera
 def main():
     set_up_simple_logging()
 
-    beamng = BeamNGpy('localhost', 64256)
-    bng = beamng.open(launch=True)
+    bng_home = "D:\\Downloads\\BeamNG\\BeamNG"  
+    bng = BeamNGpy('localhost', 64256, home=bng_home)
 
     scenario = Scenario('gridmap', 'Camera demo', description='Camera stream test')
 
