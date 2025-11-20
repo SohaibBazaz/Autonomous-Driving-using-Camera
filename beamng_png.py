@@ -50,7 +50,7 @@ def start_scenario(bng, map_name, scenario_name):
 
 import csv
 
-def image_from_camera(cam, vehicle, max_frames, frame_count, save_folder):
+def image_and_steering(cam, vehicle, max_frames, frame_count, save_folder):
     print("🎬 Starting image + steering capture...")
 
     # CSV file for steering labels
@@ -86,8 +86,9 @@ def image_from_camera(cam, vehicle, max_frames, frame_count, save_folder):
             steering = None
             if state and "electrics" in state and "steering" in state["electrics"]:
                 steering = state["electrics"]["steering"]
-
+                print(f"Steering angle: {steering}")
             # Save steering to CSV
+            print("Saving steering data...")
             writer.writerow([f"frame_{frame_count:03d}.png", steering])
 
             frame_count += 1
