@@ -4,6 +4,7 @@ import time
 from beamngpy import BeamNGpy, Scenario, Vehicle, set_up_simple_logging
 from beamngpy.sensors import Camera
 from PIL import Image
+import csv
 
 
 scenario_map = {
@@ -48,7 +49,6 @@ def start_scenario(bng, map_name, scenario_name):
     print("Vehicle connected!")
     return mycar
 
-import csv
 
 def image_and_steering(cam, vehicle, max_frames, frame_count, save_folder):
     print("🎬 Starting image + steering capture...")
