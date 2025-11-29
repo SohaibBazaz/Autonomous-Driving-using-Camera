@@ -94,8 +94,8 @@ def main():
     set_up_simple_logging()
 
     bng = BeamNGpy('localhost', 25252,
-                   home=r'D:\\Downloads\\BeamNG\\BeamNG',
-                   user=r'D:\\Downloads\\BeamNG\\userfolder')
+                   home=r'E:\\BeamNG.tech.v0.36.4.0',
+                   user=r'E:\\BeamNG.tech.v0.36.4.0\userfolder')
     bng.open(launch=True)
 
     map_name = 'east_coast_usa'
@@ -119,8 +119,10 @@ def main():
             name='front_cam',
             bng=bng,
             vehicle=vehicle,
-            pos=(-5, 0, 1),
-            dir=(1, 0, 0),
+            # (X, Y, Z): X is lateral, Y is longitudinal (forward), Z is vertical
+            # Adjusted Y to a negative value to move forward, Z remains 1.8m
+            pos=(0.0, -1, 1.8),          # <-- NEW: 0.0m Center, -1m FORWARD, 1.8m UP (unchanged)
+            dir=(0, -1, 0),                 # Direction is along the negative Y-axis (Forward)
             field_of_view_y=70,
             is_using_shared_memory=True,
             is_render_annotations=False,
@@ -133,7 +135,7 @@ def main():
         electrics = Electrics()
         vehicle.attach_sensor('electrics', electrics)
 
-        save_folder = "C:\\Users\\sohai\\OneDrive\\Desktop\\BEAMNG\\camera_images"
+        save_folder = "E:\\Beamng images"
         os.makedirs(save_folder, exist_ok=True)
 
         max_frames = 100
