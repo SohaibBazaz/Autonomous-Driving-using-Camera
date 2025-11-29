@@ -51,41 +51,77 @@ def start_scenario(bng, map_name, scenario_name):
     return mycar
 
 
-def image_and_steering(cam, vehicle, electrics, max_frames, frame_count, save_folder):
+def image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder):
     print("🎬 Starting image + steering capture...")
 
+    # CSV file for steering labels
     csv_path = os.path.join(save_folder, "steering_labels.csv")
     csv_exists = os.path.isfile(csv_path)
 
+    camera_names = [cam.name for cam in cameras]
+    
     with open(csv_path, "a", newline="") as csv_file:
         writer = csv.writer(csv_file)
 
+        # Write header
         if not csv_exists:
-            writer.writerow(["frame", "steering"])
+            header = [f"{name}_frame" for name in camera_names]
+            header.append("steering")
+            writer.writerow(header)
 
         while frame_count < max_frames:
-            time.sleep(0.05)
+            # ---- Camera Poll and Image Save ----
+            image_filenames = []
+            all_cameras_polled = True
+            
+            for cam in cameras:
+                # Poll data from the specific camera
+                data = cam.poll()
+                if data is None or "colour" not in data:
+                    print(f"⚠️ Warning: No data from {cam.name}. Skipping frame {frame_count} for {cam.name}.")
+                    image_filenames.append("") 
+                    all_cameras_polled = False
+                    continue
 
-            data = cam.poll()
-            if data is None or "colour" not in data:
+                img = data["colour"]
+                if not hasattr(img, "save"):
+                    img = Image.fromarray(img)
+
+                # Save image
+                img_name = f"{cam.name}_frame_{frame_count:03d}.png"
+                img_path = os.path.join(save_folder, img_name)
+                img.save(img_path)
+                image_filenames.append(img_name)
+            
+            # If any camera failed, skip data capture for this iteration
+            if not all_cameras_polled:
+                time.sleep(0.05)
                 continue
+            
+            # ---- Vehicle State Update for Steering Data ----
+            
+            # Use the method known to update the vehicle's internal .state dictionary in older versions
+            try:
+                vehicle.update_state() 
+            except AttributeError:
+                # If update_state() also fails, fall back to reading the existing state without refreshing
+                print("⚠️ Warning: update_state() failed. Using last known vehicle state.")
+                pass
+            
+            # Read steering data from the vehicle's internal state
+            state = vehicle.state
+            steering = None
+            if state and "electrics" in state and "steering" in state["electrics"]:
+                steering = state["electrics"]["steering"]
+            
+            # Save steering to CSV
+            row_data = image_filenames + [steering]
+            writer.writerow(row_data)
 
-            img = data["colour"]
-            if not hasattr(img, "save"):
-                img = Image.fromarray(img)
-
-            img_path = os.path.join(save_folder, f"frame_{frame_count:03d}.png")
-            img.save(img_path)
-
-            # Poll all sensors
-            vehicle.sensors.poll()
-            elec = vehicle.sensors['electrics']
-            steering = elec.get("steering", None)
-
-            writer.writerow([f"frame_{frame_count:03d}.png", steering])
-            print(f"Saved frame {frame_count}/{max_frames} | steering={steering}")
-
-            frame_count += 1
+            frame_count += 1 
+            print(f"✅ Saved frame {frame_count}/{max_frames} | steering={steering}")
+            
+            time.sleep(0.05) 
 
     return frame_count
 
@@ -93,63 +129,101 @@ def image_and_steering(cam, vehicle, electrics, max_frames, frame_count, save_fo
 def main():
     set_up_simple_logging()
 
-    bng = BeamNGpy('localhost', 25252,
-                   home=r'E:\\BeamNG.tech.v0.36.4.0',
-                   user=r'E:\\BeamNG.tech.v0.36.4.0\userfolder')
+    # -----------------------------
+    # BeamNG Path and Connection
+    # -----------------------------
+    bng = BeamNGpy('localhost', 25252, home=r'E:\\BeamNG.tech.v0.36.4.0', user=r'E:\\BeamNG.tech.v0.36.4.0\\userfolder')
+    
+    # Open/launch BeamNG
     bng.open(launch=True)
 
     map_name = 'east_coast_usa'
     vehicle = start_scenario(bng, map_name, 'gps_test')
 
+    # -----------------------------
+    # Setup and Stabilization
+    # -----------------------------
     try:
         try:
             bng.settings.set_deterministic(60)
-        except:
+        except Exception:
             pass
-
         try:
             bng.ui.hide_hud()
-        except:
+        except Exception:
             pass
 
         print("⏱️  Waiting for physics to stabilize...")
         time.sleep(3)
 
-        cam = Camera(
-            name='front_cam',
-            bng=bng,
-            vehicle=vehicle,
-            # (X, Y, Z): X is lateral, Y is longitudinal (forward), Z is vertical
-            # Adjusted Y to a negative value to move forward, Z remains 1.8m
-            pos=(0.0, -1, 1.8),          # <-- NEW: 0.0m Center, -1m FORWARD, 1.8m UP (unchanged)
-            dir=(0, -1, 0),                 # Direction is along the negative Y-axis (Forward)
-            field_of_view_y=70,
-            is_using_shared_memory=True,
-            is_render_annotations=False,
-            is_render_depth=False,
-            near_far_planes=(0.1, 1000),
-            resolution=(640, 480),
-            requested_update_time=0.05
+        # -----------------------------
+        # Camera Sensors (Front, Left, Right)
+        # -----------------------------
+        
+        # Base resolution and update settings
+        res = (640, 480)
+        update_time = 0.05
+        fov = 70
+        
+        # 1. Front Camera (Tuned Dashcam)
+        front_cam = Camera(
+            name='front_cam', bng=bng, vehicle=vehicle,
+            pos=(0.0, -0.5, 1.8),       # Center, Forward (Negative Y), High
+            dir=(0, -1, 0),             # Looking Forward (Negative Y-axis)
+            field_of_view_y=fov, resolution=res, requested_update_time=update_time,
+            is_using_shared_memory=True, is_render_annotations=False, is_render_depth=False, near_far_planes=(0.1, 1000)
         )
+        
+        # 2. Left Camera (User Specified Position)
+        # Assuming: X=Lateral, Y=Forward, Z=Vertical
+        # Direction should be along the X-axis (Lateral)
+        left_cam = Camera(
+            name='left_cam', bng=bng, vehicle=vehicle,
+            pos=(1.0, -1.0, 1.0),       # X=1.0, Y=-1.0, Z=1.0 (User specified)
+            dir=(0, -1, 0),              # Looking Left (Positive X-axis)
+            field_of_view_y=fov, resolution=res, requested_update_time=update_time,
+            is_using_shared_memory=True, is_render_annotations=False, is_render_depth=False, near_far_planes=(0.1, 1000)
+        )
+        
+        # 3. Right Camera (User Specified Position)
+        # Direction should be opposite the X-axis (Lateral)
+        right_cam = Camera(
+            name='right_cam', bng=bng, vehicle=vehicle,
+            pos=(-1.0, -1.0, 1.0),      # X=-1.0, Y=-1.0, Z=1.0 (User specified)
+            dir=(0, -1, 0),             # Looking Right (Negative X-axis)
+            field_of_view_y=fov, resolution=res, requested_update_time=update_time,
+            is_using_shared_memory=True, is_render_annotations=False, is_render_depth=False, near_far_planes=(0.1, 1000)
+        )
+        
+        # Store all cameras in a list for easier iteration and cleanup
+        cameras = [front_cam, left_cam, right_cam]
 
-        electrics = Electrics()
-        vehicle.attach_sensor('electrics', electrics)
-
+        # -----------------------------
+        # Image Saving Setup
+        # -----------------------------
         save_folder = "E:\\Beamng images"
         os.makedirs(save_folder, exist_ok=True)
-
         max_frames = 100
         frame_count = 0
 
-        frame_count = image_and_steering(cam,vehicle, electrics, max_frames, frame_count, save_folder)
+        # Capture images (pass the list of cameras)
+        frame_count = image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder)
         print(f"Captured {frame_count} frames.")
 
     finally:
+        # Cleanup cameras and close BeamNG even if errors occur
+        try:
+            # Remove all cameras
+            for cam in cameras:
+                cam.remove()
+        except Exception:
+            pass
         try:
             bng.close()
-        except:
+        except Exception:
             pass
         print("🔒 BeamNG closed.")
+        
 
 
 if __name__ == "__main__":
