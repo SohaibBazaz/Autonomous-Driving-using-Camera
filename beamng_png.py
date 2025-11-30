@@ -9,6 +9,8 @@ from PIL import Image
 import csv
 import cv2
 import numpy as np
+import torch
+import pandas as pd
 
 scenario_map = {
     "smallgrid": {
@@ -179,6 +181,144 @@ def preprocess(image):
 
 # ----------------------------------------------------
 
+# --- Data Reading and Augmentation Helpers ---
+
+def load_image(data_dir, image_file):
+    """
+    Loads the image from file.
+    ASSUMPTION: The image file is ALREADY preprocessed (66x200, YUV format)
+    and saved as a standard PNG/image file.
+    """
+    img_path = os.path.join(data_dir, image_file)
+    # We load the image as-is. OpenCV will load the PNG (which contains YUV data)
+    # as a BGR image, which we immediately convert to RGB for the augmentation pipeline.
+    # NOTE: Since the data stored is YUV, but saved/loaded as standard channels (BGR/RGB), 
+    # we proceed without a YUV-to-RGB conversion here, relying on the augmentation 
+    # functions (like brightness) to work on the channel data structure.
+    image = cv2.imread(img_path) 
+    if image is None:
+        raise FileNotFoundError(f"Image not found at: {img_path}")
+        
+    # Standard OpenCV loading converts to BGR. We convert to RGB for consistency 
+    # with the rest of the augmentation functions.
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def choose_image(data_dir, center, left, right, steering_angle):
+    """
+    Randomly chooses among center, left, or right camera image.
+    Loads the ALREADY PRE-PROCESSED image.
+    """
+    choice = np.random.choice(3)
+    if choice == 0: # Left camera chosen
+        return load_image(data_dir, left), steering_angle + 0.2
+    elif choice == 1: # Right camera chosen
+        return load_image(data_dir, right), steering_angle - 0.2
+    return load_image(data_dir, center), steering_angle # Center camera chosen
+
+
+# --- Augmentation Functions (REMAIN UNCHANGED) ---
+
+def random_flip(image, steering_angle):
+    # ... (same as before) ...
+    if np.random.rand() < 0.5:
+        image = cv2.flip(image, 1)
+        steering_angle = -steering_angle
+    return image, steering_angle
+
+
+def random_translate(image, steering_angle, range_x, range_y):
+    # ... (same as before) ...
+    trans_x = range_x * (np.random.rand() - 0.5)
+    trans_y = range_y * (np.random.rand() - 0.5)
+    steering_angle += trans_x * 0.002
+    trans_m = np.float32([[1, 0, trans_x], [0, 1, trans_y]])
+    height, width = image.shape[:2]
+    image = cv2.warpAffine(image, trans_m, (width, height))
+    return image, steering_angle
+
+
+def random_brightness(image):
+    """
+    Randomly adjusts the brightness (V channel in HSV).
+    NOTE: Works by converting to HSV, adjusting V, then converting back to RGB.
+    This works on the channel structure of the loaded image, even if the content
+    is conceptually YUV.
+    """
+    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    ratio = 1.0 + 0.4 * (np.random.rand() - 0.5)
+    hsv[:, :, 2] = hsv[:, :, 2] * ratio
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+
+def augment(data_dir, center, left, right, steering_angle, range_x=100, range_y=10):
+    """
+    Applies combined data augmentation steps to an ALREADY PRE-PROCESSED image.
+    """
+    # 1. Choose image (loads the pre-processed image) and adjust steering
+    image, steering_angle = choose_image(data_dir, center, left, right, steering_angle) 
+    
+    # 2. Random flip
+    image, steering_angle = random_flip(image, steering_angle)
+    
+    # 3. Random translation
+    image, steering_angle = random_translate(image, steering_angle, range_x, range_y)
+    
+    # 4. Random brightness
+    image = random_brightness(image)
+    
+    return image, steering_angle
+
+
+class CustomDataset(torch.utils.data.Dataset):
+
+    # ... (__init__ remains the same) ...
+    def __init__(self, csv_file_path, base_image_dir, transform = None):
+        self.csv_file_path = csv_file_path
+        self.base_image_dir = base_image_dir
+        self.transform = transform
+        self.examples = []
+
+        data_df = pd.read_csv(self.csv_file_path)
+        
+        for index, row in data_df.iterrows():
+            center_img_file = os.path.join('front_cam', row['front_cam_frame'])
+            left_img_file = os.path.join('left_cam', row['left_cam_frame'])
+            right_img_file = os.path.join('right_cam', row['right_cam_frame'])
+            steering_angle = float(row['steering'])
+            
+            self.examples.append((center_img_file, left_img_file, right_img_file, steering_angle))
+
+
+    def __getitem__(self, index):
+        """Retrieves one data point and applies dynamic augmentation ONLY."""
+        center_file, left_file, right_file, steering_angle = self.examples[index]
+
+        # ------------------------------------------------
+        # 1. Dynamic Augmentation (Randomly applied to the pre-processed image)
+        if np.random.rand() < 0.6:
+            # Augment, which includes choosing an image (center/left/right) and applying flip/translate/brightness
+            # The 'augment' function handles loading the pre-processed image.
+            image, steering_angle = augment(self.base_image_dir, center_file, left_file, right_file, steering_angle)
+        else:
+            # Load the pre-processed center image only
+            image = load_image(self.base_image_dir, center_file)
+            
+        # ------------------------------------------------
+        # 2. NO PREPROCESSING STEP HERE (It was done offline)
+        
+        # ------------------------------------------------
+        # 3. Final PyTorch Transformations (e.g., Normalization)
+        if self.transform is not None:
+            # Converts numpy array (H, W, C) to Tensor (C, H, W) and normalizes
+            image = self.transform(image) 
+            
+        steering_angle = torch.tensor(steering_angle, dtype=torch.float32)
+            
+        return image, steering_angle
+
+    def __len__(self):
+        return len(self.examples)
 
 def main():
     set_up_simple_logging()
