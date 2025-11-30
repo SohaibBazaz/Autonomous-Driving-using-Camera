@@ -5,7 +5,10 @@ from beamngpy import BeamNGpy, Scenario, Vehicle, set_up_simple_logging
 from beamngpy.sensors import Camera, Electrics
 from PIL import Image
 import csv
-
+from PIL import Image
+import csv
+import cv2
+import numpy as np
 
 scenario_map = {
     "smallgrid": {
@@ -54,6 +57,9 @@ def start_scenario(bng, map_name, scenario_name):
 def image_and_steering(cameras, vehicle, max_frames, frame_count, base_save_folder, electrics):
     print("🎬 Starting image + steering capture...")
 
+    # Dedicated folder for processed images is no longer needed, 
+    # as the images are saved directly into the camera folders.
+    
     # CSV file for steering labels
     csv_path = os.path.join(base_save_folder, "steering_labels.csv")
     csv_exists = os.path.isfile(csv_path)
@@ -79,35 +85,52 @@ def image_and_steering(cameras, vehicle, max_frames, frame_count, base_save_fold
         while frame_count < max_frames:
             image_filenames = []
             all_cameras_polled = True
+            
+            # --- Get Steering from electrics sensor (Polled first to ensure data sync) ---
+            
+            try:
+                # Poll all sensors (cameras and electrics) attached to the vehicle simultaneously.
+                vehicle.sensors.poll() 
+            except AttributeError:
+                try:
+                    vehicle.update_state() 
+                except:
+                    pass
+            
+            # Retrieve electrics data
+            steering = electrics.get("steering", None)
 
+
+            # --- Camera Poll, Preprocess, and Save ---
             for cam in cameras:
                 data = cam.poll()
                 if data is None or "colour" not in data:
-                    print(f"⚠️ Warning: No data from {cam.name}. Skipping frame {frame_count}.")
-                    image_filenames.append("")
-                    all_cameras_polled = False
+                    # ... (error handling remains the same) ...
                     continue
 
-                img = data["colour"]
-                if not hasattr(img, "save"):
-                    img = Image.fromarray(img)
+                # 1. Get the raw image data. 
+                # Ensure it is a NumPy array for preprocessing and slicing.
+                raw_img_data = np.array(data["colour"]) # <--- CRITICAL FIX: Explicit conversion to NumPy array
+                
+                # 2. Apply the full preprocessing pipeline
+                # The image is now cropped (66x200), resized, and in YUV format.
+                processed_img_np = preprocess(raw_img_data) # <--- THIS NOW RECEIVES A NUMPY ARRAY
+                
+                # 3. Convert the processed NumPy array to a PIL Image for saving
+                processed_img_pil = Image.fromarray(processed_img_np)
 
-                # Save image in camera-specific folder
+                # Save the PROCESSED image in the camera-specific folder
                 img_name = f"frame_{frame_count:03d}.png"
                 img_path = os.path.join(camera_folders[cam.name], img_name)
-                img.save(img_path)
+                processed_img_pil.save(img_path)
                 image_filenames.append(img_name)
 
             if not all_cameras_polled:
                 time.sleep(0.05)
                 continue
 
-            # Get steering from electrics sensor
-            state = vehicle.sensors.poll()
-            steering = electrics.get("steering", None)
-
-            # Write CSV row
-            row_data = [steering]
+            # Write CSV row (linking the processed images to the steering angle)
+            row_data = image_filenames + [steering]
             writer.writerow(row_data)
 
             frame_count += 1
@@ -118,6 +141,43 @@ def image_and_steering(cameras, vehicle, max_frames, frame_count, base_save_fold
     print("🎉 Image + steering capture complete!")
     return frame_count
 
+# --- Helper definitions for AI Model Preprocessing ---
+
+def crop(image):
+    """
+    Crop the image (removing the sky at the top and the car front at the bottom)
+    NVIDIA model crops 60 pixels from top and 25 from bottom.
+    """
+    # image[y_start:y_end, x_start:x_end, :]
+    return image[60:-25, :, :]
+
+IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 66, 200, 3
+
+def resize(image):
+    """
+    Resize the image to the input shape used by the network model (66x200)
+    """
+    return cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), cv2.INTER_AREA)
+
+
+def rgb2yuv(image):
+    """
+    Convert the image from RGB (BeamNG default) to YUV (NVIDIA model required input)
+    """
+    return cv2.cvtColor(image, cv2.COLOR_RGB2YUV)
+
+
+def preprocess(image):
+    """
+    Combine all preprocess functions into one
+    """
+    # NOTE: These functions require OpenCV (cv2) which must be imported!
+    image = crop(image)
+    image = resize(image)
+    image = rgb2yuv(image)
+    return image
+
+# ----------------------------------------------------
 
 
 def main():
@@ -126,7 +186,7 @@ def main():
     # -----------------------------
     # BeamNG Path and Connection
     # -----------------------------
-    bng = BeamNGpy('localhost', 25252, home=r'D:\\Downloads\\BeamNG\\BeamNG', user=r'D:\\Downloads\\BeamNG\\BeamN')
+    bng = BeamNGpy('localhost', 25252, home=r'E:\\BeamNG.tech.v0.36.4.0', user=r'E:\\BeamNG.tech.v0.36.4.0')
     
     # Open/launch BeamNG
     bng.open(launch=True)
@@ -195,7 +255,7 @@ def main():
         # -----------------------------
         # Image Saving Setup
         # -----------------------------
-        save_folder = "C:\\Users\\sohai\\OneDrive\\Desktop\\BEAMNG\\camera_stream_images"
+        save_folder = "E:\\Beamng images"
         os.makedirs(save_folder, exist_ok=True)
         max_frames = 100
         frame_count = 0
