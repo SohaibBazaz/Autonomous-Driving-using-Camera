@@ -51,7 +51,7 @@ def start_scenario(bng, map_name, scenario_name):
     return mycar
 
 
-def image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder):
+def image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder, electrics):
     print("🎬 Starting image + steering capture...")
 
     # CSV file for steering labels
@@ -107,12 +107,21 @@ def image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder):
                 # If update_state() also fails, fall back to reading the existing state without refreshing
                 print("⚠️ Warning: update_state() failed. Using last known vehicle state.")
                 pass
-            
+            from beamngpy.sensors import Electrics
+
+# Attach electrics sensor
+            vehicle.sensors.poll()
+            elec = vehicle.sensors['electrics']
+            steering = elec.get("steering", None)
+
             # Read steering data from the vehicle's internal state
-            state = vehicle.state
-            steering = None
-            if state and "electrics" in state and "steering" in state["electrics"]:
-                steering = state["electrics"]["steering"]
+            state = vehicle.sensors.poll()
+            elec=vehicle.sensors["electrics"]
+            steering=elec.get("steering",None)
+            
+            ##steering = None
+            ##if state and "electrics" in state and "steering" in state["electrics"]:
+             ##   steering = state["electrics"]["steering"]
             
             # Save steering to CSV
             row_data = image_filenames + [steering]
@@ -132,7 +141,7 @@ def main():
     # -----------------------------
     # BeamNG Path and Connection
     # -----------------------------
-    bng = BeamNGpy('localhost', 25252, home=r'E:\\BeamNG.tech.v0.36.4.0', user=r'E:\\BeamNG.tech.v0.36.4.0\\userfolder')
+    bng = BeamNGpy('localhost', 25252, home=r'D:\\Downloads\\BeamNG\\BeamNG', user=r'D:\\Downloads\\BeamNG\\BeamN')
     
     # Open/launch BeamNG
     bng.open(launch=True)
@@ -201,13 +210,14 @@ def main():
         # -----------------------------
         # Image Saving Setup
         # -----------------------------
-        save_folder = "E:\\Beamng images"
+        save_folder = "C:\\Users\\sohai\\OneDrive\\Desktop\\BEAMNG\\camera_stream_images"
         os.makedirs(save_folder, exist_ok=True)
         max_frames = 100
         frame_count = 0
-
+        electrics = Electrics()
+        vehicle.attach_sensor('electrics', electrics)
         # Capture images (pass the list of cameras)
-        frame_count = image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder)
+        frame_count = image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder, electrics)
         print(f"Captured {frame_count} frames.")
 
     finally:
