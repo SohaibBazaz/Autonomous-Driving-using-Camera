@@ -51,35 +51,40 @@ def start_scenario(bng, map_name, scenario_name):
     return mycar
 
 
-def image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder, electrics):
+def image_and_steering(cameras, vehicle, max_frames, frame_count, base_save_folder, electrics):
     print("🎬 Starting image + steering capture...")
 
     # CSV file for steering labels
-    csv_path = os.path.join(save_folder, "steering_labels.csv")
+    csv_path = os.path.join(base_save_folder, "steering_labels.csv")
     csv_exists = os.path.isfile(csv_path)
 
+    # Create separate folders for each camera
+    camera_folders = {}
+    for cam in cameras:
+        cam_folder = os.path.join(base_save_folder, cam.name)
+        os.makedirs(cam_folder, exist_ok=True)
+        camera_folders[cam.name] = cam_folder
+
     camera_names = [cam.name for cam in cameras]
-    
+
     with open(csv_path, "a", newline="") as csv_file:
         writer = csv.writer(csv_file)
 
-        # Write header
+        # Write CSV header if it doesn't exist
         if not csv_exists:
             header = [f"{name}_frame" for name in camera_names]
             header.append("steering")
             writer.writerow(header)
 
         while frame_count < max_frames:
-            # ---- Camera Poll and Image Save ----
             image_filenames = []
             all_cameras_polled = True
-            
+
             for cam in cameras:
-                # Poll data from the specific camera
                 data = cam.poll()
                 if data is None or "colour" not in data:
-                    print(f"⚠️ Warning: No data from {cam.name}. Skipping frame {frame_count} for {cam.name}.")
-                    image_filenames.append("") 
+                    print(f"⚠️ Warning: No data from {cam.name}. Skipping frame {frame_count}.")
+                    image_filenames.append("")
                     all_cameras_polled = False
                     continue
 
@@ -87,52 +92,32 @@ def image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder, e
                 if not hasattr(img, "save"):
                     img = Image.fromarray(img)
 
-                # Save image
-                img_name = f"{cam.name}_frame_{frame_count:03d}.png"
-                img_path = os.path.join(save_folder, img_name)
+                # Save image in camera-specific folder
+                img_name = f"frame_{frame_count:03d}.png"
+                img_path = os.path.join(camera_folders[cam.name], img_name)
                 img.save(img_path)
                 image_filenames.append(img_name)
-            
-            # If any camera failed, skip data capture for this iteration
+
             if not all_cameras_polled:
                 time.sleep(0.05)
                 continue
-            
-            # ---- Vehicle State Update for Steering Data ----
-            
-            # Use the method known to update the vehicle's internal .state dictionary in older versions
-            try:
-                vehicle.update_state() 
-            except AttributeError:
-                # If update_state() also fails, fall back to reading the existing state without refreshing
-                print("⚠️ Warning: update_state() failed. Using last known vehicle state.")
-                pass
-            from beamngpy.sensors import Electrics
 
-# Attach electrics sensor
-            vehicle.sensors.poll()
-            elec = vehicle.sensors['electrics']
-            steering = elec.get("steering", None)
-
-            # Read steering data from the vehicle's internal state
+            # Get steering from electrics sensor
             state = vehicle.sensors.poll()
-            elec=vehicle.sensors["electrics"]
-            steering=elec.get("steering",None)
-            
-            ##steering = None
-            ##if state and "electrics" in state and "steering" in state["electrics"]:
-             ##   steering = state["electrics"]["steering"]
-            
-            # Save steering to CSV
-            row_data = image_filenames + [steering]
+            steering = electrics.get("steering", None)
+
+            # Write CSV row
+            row_data = [steering]
             writer.writerow(row_data)
 
-            frame_count += 1 
+            frame_count += 1
             print(f"✅ Saved frame {frame_count}/{max_frames} | steering={steering}")
-            
-            time.sleep(0.05) 
 
+            time.sleep(0.05)
+
+    print("🎉 Image + steering capture complete!")
     return frame_count
+
 
 
 def main():
