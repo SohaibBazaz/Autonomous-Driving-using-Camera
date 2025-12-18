@@ -12,6 +12,11 @@ import numpy as np
 import torch
 import pandas as pd
 
+##from model import load_trained_model
+
+MAX_STEERING_ANGLE_DEGREES = 360.0  # Must match training code
+
+
 scenario_map = {
     "smallgrid": {
         "mycar": {"position": (0, 0, 0), "rotation": (0, 0, 0, 1)},
@@ -54,6 +59,8 @@ def start_scenario(bng, map_name, scenario_name):
     time.sleep(2)
     print("Vehicle connected!")
     return mycar
+
+
 
 
 def image_and_steering(cameras, vehicle, max_frames, frame_count, base_save_folder, electrics):
@@ -122,23 +129,23 @@ def image_and_steering(cameras, vehicle, max_frames, frame_count, base_save_fold
                 processed_img_pil = Image.fromarray(processed_img_np)
 
                 # Save the PROCESSED image in the camera-specific folder
-                img_name = f"frame_{frame_count:03d}.png"
-                img_path = os.path.join(camera_folders[cam.name], img_name)
-                processed_img_pil.save(img_path)
-                image_filenames.append(img_name)
+                ##img_name = f"frame_{frame_count:03d}.png"
+                ##img_path = os.path.join(camera_folders[cam.name], img_name)
+                ##processed_img_pil.save(img_path)
+                ##image_filenames.append(img_name)
 
-            if not all_cameras_polled:
-                time.sleep(0.05)
-                continue
+            ##if not all_cameras_polled:
+                ##time.sleep(0.05)
+                ##continue
 
             # Write CSV row (linking the processed images to the steering angle)
-            row_data = image_filenames + [steering]
-            writer.writerow(row_data)
+            ##row_data = image_filenames + [steering]
+            ##writer.writerow(row_data)
 
             frame_count += 1
-            print(f"✅ Saved frame {frame_count}/{max_frames} | steering={steering}")
+            ##print(f"✅ Saved frame {frame_count}/{max_frames} | steering={steering}")
 
-            time.sleep(0.05)
+            ##time.sleep(0.05)
 
     print("🎉 Image + steering capture complete!")
     return frame_count
@@ -178,6 +185,26 @@ def preprocess(image):
     image = resize(image)
     image = rgb2yuv(image)
     return image
+
+def my_transform(image_np):
+    """
+    Convert a preprocessed NumPy image to PyTorch tensor with normalization.
+    image_np: HWC format (66, 200, 3), uint8, YUV format
+    Returns: HWC format (66, 200, 3), float32, normalized to [-1, 1]
+    NOTE: We keep HWC format because the model has permute(0,3,1,2) in forward()
+    """
+    # Make sure it's a numpy array
+    if not isinstance(image_np, np.ndarray):
+        image_np = np.array(image_np)
+    
+    # DON'T transpose - keep as HWC (66, 200, 3)
+    # Convert to torch tensor directly
+    tensor = torch.from_numpy(image_np.copy()).float()
+    
+    # Normalize [0,255] -> [-1,1]
+    tensor = tensor / 127.5 - 1.0
+    
+    return tensor  # Returns (66, 200, 3) in HWC format
 
 # ----------------------------------------------------
 
@@ -320,20 +347,112 @@ class CustomDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.examples)
 
+def inference(cameras, vehicle, model, throttle):
+    """
+    AI inference using all three cameras with averaged predictions.
+    Matches the training approach where each camera had steering offsets.
+    """
+    model.eval()
+    
+    steering_predictions = []
+    camera_names = ['front_cam', 'left_cam', 'right_cam']
+    
+    # Get predictions from all three cameras
+    for cam in cameras:
+        data = cam.poll()
+        
+        if data is None or "colour" not in data:
+            print(f"⚠️ No data from {cam.name}")
+            continue
+        
+        # Preprocess (same as training: crop, resize, rgb2yuv)
+        raw_img_data = np.array(data["colour"])
+        preprocessed = preprocess(raw_img_data)
+        
+        # Transform to tensor (HWC format, normalized to [-1, 1])
+        # NOTE: Keep HWC because model has permute(0,3,1,2) in forward()
+        tensor = my_transform(preprocessed)
+        tensor = tensor.unsqueeze(0)  # Add batch dimension
+        
+        # Get steering prediction
+        with torch.no_grad():
+            steering = model(tensor).item()
+        
+        # Apply camera offset adjustments (SAME AS TRAINING)
+        if cam.name == 'left_cam':
+            steering += 0.2  # Left camera correction
+        elif cam.name == 'right_cam':
+            steering -= 0.2  # Right camera correction
+        # front_cam has no offset (already correct)
+        
+        steering_predictions.append(steering)
+        print(f"  📷 {cam.name}: raw={steering:.3f}")
+    
+    # Average all predictions
+    if len(steering_predictions) > 0:
+        final_steering = np.mean(steering_predictions)
+        
+        # Denormalize: Your training divides by MAX_STEERING_ANGLE_DEGREES (360.0)
+        # So multiply back to get actual steering value
+        final_steering = final_steering * MAX_STEERING_ANGLE_DEGREES
+        
+        # Clip to valid steering range for BeamNG (-1.0 to 1.0)
+        final_steering = np.clip(final_steering, -1.0, 1.0)
+        
+        print(f"🎮 Final Steering: {final_steering:.3f}, Throttle: {throttle:.2f}")
+        vehicle.control(steering=final_steering, throttle=throttle, brake=0)
+    else:
+        print("⚠️ No valid camera data!")
+        
+
+
+
+    
+
 def main():
+
     set_up_simple_logging()
 
     # -----------------------------
     # BeamNG Path and Connection
     # -----------------------------
-    bng = BeamNGpy('localhost', 25252, home=r'E:\\BeamNG.tech.v0.36.4.0', user=r'E:\\BeamNG.tech.v0.36.4.0')
+    bng = BeamNGpy('localhost', 25252, home=r'D:\\Downloads\\BeamNG\\BeamNG', user=r'D:\\Downloads\\BeamNG\\userfolder')
     
     # Open/launch BeamNG
     bng.open(launch=True)
 
     map_name = 'east_coast_usa'
     vehicle = start_scenario(bng, map_name, 'gps_test')
+    from model import DriverNet
+    import torch
+    from torch.serialization import add_safe_globals
 
+# Allowlist your model class (PyTorch security requirement)
+    add_safe_globals([DriverNet])
+
+    model = torch.load("ai_driver_cnn.pth", weights_only=False, map_location="cpu")
+
+
+   # Test your model with a known image
+    from PIL import Image
+    import torch
+
+    model.eval()
+    test_img_path = "D:\\Downloads\\beamng_pics\\front_cam\\frame_473.png"
+    img = cv2.imread(test_img_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    tensor = my_transform(img)
+    tensor = tensor.unsqueeze(0)
+
+    with torch.no_grad():
+        output = model(tensor).item()
+        print(f"Test output: {output}")
+        print(f"After clipping: {np.clip(output, -1, 1)}")
+
+
+    if model is None:
+        raise Exception("Failed to load the AI model.")
     # -----------------------------
     # Setup and Stabilization
     # -----------------------------
@@ -402,9 +521,18 @@ def main():
         electrics = Electrics()
         vehicle.attach_sensor('electrics', electrics)
         # Capture images (pass the list of cameras)
-        frame_count = image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder, electrics)
-        print(f"Captured {frame_count} frames.")
+        ##frame_count = image_and_steering(cameras, vehicle, max_frames, frame_count, save_folder, electrics)
 
+        
+        print(f"Captured {frame_count} frames.")
+        throttle = 0.3
+        print("🚀 Starting AI inference loop...")
+        try:
+            while True:
+                inference(cameras, vehicle, model, throttle)
+                time.sleep(0.05)  # Small delay to match camera update rate
+        except KeyboardInterrupt:
+            print("🛑 Stopped by user")
     finally:
         # Cleanup cameras and close BeamNG even if errors occur
         try:
