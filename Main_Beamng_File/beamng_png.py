@@ -14,7 +14,7 @@ import pandas as pd
 
 ##from model import load_trained_model
 
-MAX_STEERING_ANGLE_DEGREES = 360.0  # Must match training code
+MAX_STEERING_ANGLE_DEGREES = 540.0  # Must match training code
 
 
 scenario_map = {
@@ -348,65 +348,50 @@ class CustomDataset(torch.utils.data.Dataset):
         return len(self.examples)
 
 def inference(cameras, vehicle, model, throttle):
-    """
-    AI inference using all three cameras with averaged predictions.
-    Matches the training approach where each camera had steering offsets.
-    """
     model.eval()
-    
     steering_predictions = []
-    camera_names = ['front_cam', 'left_cam', 'right_cam']
     
-    # Get predictions from all three cameras
+    # Identify cameras
+    # It is faster to access them by index if they are in a fixed list
+    # or find them once outside the loop.
+# 1. Find only the front camera
+    front_camera_data = None
     for cam in cameras:
-        data = cam.poll()
-        
-        if data is None or "colour" not in data:
-            print(f"⚠️ No data from {cam.name}")
-            continue
-        
-        # Preprocess (same as training: crop, resize, rgb2yuv)
-        raw_img_data = np.array(data["colour"])
+        if cam.name == 'front_cam':
+            front_camera_data = cam.poll()
+            break
+            
+    if front_camera_data is not None and "colour" in front_camera_data:
+        # 2. Preprocess (Must be IDENTICAL to training)
+        raw_img_data = np.array(front_camera_data["colour"])
         preprocessed = preprocess(raw_img_data)
+        # 2. Transform and Predict
+    tensor = my_transform(preprocessed)
+    tensor=tensor.unsqueeze(0)
         
-        # Transform to tensor (HWC format, normalized to [-1, 1])
-        # NOTE: Keep HWC because model has permute(0,3,1,2) in forward()
-        tensor = my_transform(preprocessed)
-        tensor = tensor.unsqueeze(0)  # Add batch dimension
+    with torch.no_grad():
+        prediction = model(tensor).item()
         
-        # Get steering prediction
-        with torch.no_grad():
-            steering = model(tensor).item()
-        
-        # Apply camera offset adjustments (SAME AS TRAINING)
-        if cam.name == 'left_cam':
-            steering += 0.2  # Left camera correction
-        elif cam.name == 'right_cam':
-            steering -= 0.2  # Right camera correction
-        # front_cam has no offset (already correct)
-        
-        steering_predictions.append(steering)
-        print(f"  📷 {cam.name}: raw={steering:.3f}")
-    
-    # Average all predictions
+        # 3. DO NOT manually add 0.2 here! 
+        # The model already learned the offset during training.
+    steering_predictions.append(prediction)
+
     if len(steering_predictions) > 0:
+        # 4. Average the normalized predictions [-1, 1]
         final_steering = np.mean(steering_predictions)
         
-        # Denormalize: Your training divides by MAX_STEERING_ANGLE_DEGREES (360.0)
-        # So multiply back to get actual steering value
-        final_steering = final_steering * MAX_STEERING_ANGLE_DEGREES
+        # 5. REMOVE the "* 360.0". 
+        # If the car steers too weakly, use a small GAIN (e.g., 1.5)
+        # instead of a massive 360x multiplier.
+        STEERING_GAIN = 1.0 
+        final_steering = final_steering * STEERING_GAIN
         
-        # Clip to valid steering range for BeamNG (-1.0 to 1.0)
+        # 6. Final Clip and Control
         final_steering = np.clip(final_steering, -1.0, 1.0)
         
-        print(f"🎮 Final Steering: {final_steering:.3f}, Throttle: {throttle:.2f}")
         vehicle.control(steering=final_steering, throttle=throttle, brake=0)
-    else:
-        print("⚠️ No valid camera data!")
-        
-
-
-
+        print(f"🎮 Steer: {final_steering:.3f}")
+        print("Model prediction: ",prediction)
     
 
 def main():
@@ -430,7 +415,7 @@ def main():
 # Allowlist your model class (PyTorch security requirement)
     add_safe_globals([DriverNet])
 
-    model = torch.load("ai_driver_cnn.pth", weights_only=False, map_location="cpu")
+    model = torch.load("ai_driver_cnn_deep_3.pth", weights_only=False, map_location="cpu")
 
 
    # Test your model with a known image
