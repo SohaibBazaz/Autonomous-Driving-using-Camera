@@ -48,16 +48,14 @@ class DriverNet(nn.Module):
         
 
     def forward(self, input):
-        # Permute the input image tensor from (B, H, W, C) to (B, C, H, W)
         input = input.permute(0, 3, 1, 2)
-        
         output = self.conv_layers(input)
-        
-        # Flatten the output of the convolutional layers
-        output = output.view(output.size(0), -1)
-        
-        # Pass through linear layers
+    
+    # ALTERNATIVE FIX: Use reshape, which handles non-contiguity automatically
+        output = output.reshape(output.size(0), -1) 
+    
+    # Pass through linear layers
         output = self.linear_layers(output)
-        return output
+        return output 
 
 # ---------------------------------------------------
