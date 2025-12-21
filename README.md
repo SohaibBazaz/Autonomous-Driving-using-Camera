@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/107daaae-d2b0-4cb8-bd5e-f35f791b00c5
 
 
 
-## Model 2 Demo: (Performed Slightly better than Model 1, i.e is able to steer its way towards the road)
+## Model 2 Demo: (Performed Slightly better than Model 1, i.e is able to steer its way towards the road trying to avoid the obstacles)
 
 
 https://github.com/user-attachments/assets/3d9713a2-d861-4cef-a51e-133a0bab2aee
