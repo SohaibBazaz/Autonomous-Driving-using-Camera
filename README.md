@@ -20,13 +20,24 @@ This project explores end-to-end deep learning for autonomous steering using the
 - **Validation:** 25% of dataset reserved
 - **Note:** Models were partially trained due to limited computation power, which affected performance
 
-## Results
+## Results 
+- Note: Car was purposely parked at an angle to check if it goes into lane
+- 
 ## Training Phase:
 <img width="499" height="296" alt="image" src="https://github.com/user-attachments/assets/85164024-3662-4f86-8767-a42a0775657c" />
 
-## Model 1 Demo:
+## Model 1 Demo: (Baseline so it tries to maneuver towards the left but fails and crashes while steering right)
 
 
-## Model 2 Demo:
+https://github.com/user-attachments/assets/107daaae-d2b0-4cb8-bd5e-f35f791b00c5
 
-## Model 3 Demo:
+
+
+## Model 2 Demo: (Performed Slightly better than Model 1, i.e is able to steer its way towards the road)
+
+
+https://github.com/user-attachments/assets/3d9713a2-d861-4cef-a51e-133a0bab2aee
+
+
+
+## Model 3 Demo: (Performed better than the previous ones. Although not perfect but still managed to go in a straight line from an angled parking postion)
